@@ -1,0 +1,153 @@
+import { client } from "../db/dbConfig.js";
+import { ScanCommand, DeleteCommand } from "@aws-sdk/lib-dynamodb";
+import GetZoomAccessToken from "../utilities/GetZoomAccessToken.js";
+import axios from "axios";
+
+
+const ListMeetings = async(request, response) => {
+
+    const params = {
+        TableName: process.env.DYNAMO_DB_MEETINGS_TABLE_NAME
+    };
+
+    try{
+
+        const dbResponse = await client.send(new ScanCommand(params));
+        const now = new Date();
+        
+        // Transform meetings to match frontend interface
+        const meetingsWithStatus = dbResponse.Items.map(meeting => {
+            const meetingDateTime = new Date(meeting.meeting_time_ist);
+            const duration = meeting.duration || 60;
+            const meetingEndTime = new Date(meetingDateTime.getTime() + duration * 60000);
+
+            let status;
+            if (now < meetingDateTime) {
+                status = 'scheduled';
+            } else if (now >= meetingDateTime && now <= meetingEndTime) {
+                status = 'ongoing';
+            } else {
+                status = 'completed';
+            }
+
+            // Extract date and time from meeting_time_ist
+            const dateObj = new Date(meeting.meeting_time_ist);
+            const date = dateObj.toISOString().split('T')[0]; // YYYY-MM-DD
+            const time = dateObj.toTimeString().slice(0, 5); // HH:MM
+
+            // Get participant details (student IDs and names)
+            const studentIds = meeting.participants || [];
+
+            return {
+                id: meeting.MEETING_ID,
+                title: meeting.title || `Meeting ${meeting.MEETING_ID}`, // Generate title if not present
+                description: meeting.description || '',
+                date: date,
+                time: time,
+                duration: duration,
+                teacherId: meeting.owner || '',
+                teacherName: meeting.owner_name || meeting.owner || '', // Use owner_name if available
+                studentIds: studentIds,
+                meetingLink: meeting.url || '',
+                status: status
+            };
+        });
+
+        response.status(200).json({meetings: meetingsWithStatus});
+
+    }catch(error){
+        response.status(500).json({message: error.message});
+    };
+
+};
+
+
+
+const DeleteMeeting = async(request, response) => {
+
+    const { meeting_id } = request.body; 
+
+    const token = await GetZoomAccessToken();
+
+    if (!meeting_id) {
+        return response.status(400).json({ message: "Meeting ID is required" });
+    }
+     
+    await axios.delete(
+      `https://api.zoom.us/v2/meetings/${meeting_id}`,
+      {
+        headers: { Authorization: `Bearer ${token}` }
+      }
+    );
+
+    const params = {
+        TableName: process.env.DYNAMO_DB_MEETINGS_TABLE_NAME,
+        Key: {
+            MEETING_ID: meeting_id
+        }
+    };
+
+    try{
+        await client.send(new DeleteCommand(params));
+        response.status(200).json({ 
+            message: "Meeting deleted successfully",
+            meeting_id: meeting_id 
+        });
+
+    }catch(error){
+        response.status(500).json({message: error.message});
+    };
+};
+
+const GetMeetingStats = async(request, response) => {
+
+    const params = {
+        TableName: process.env.DYNAMO_DB_MEETINGS_TABLE_NAME
+    };
+
+    try{
+        const dbResponse = await client.send(new ScanCommand(params));
+        const meetings = dbResponse.Items;
+
+        const now = new Date();
+        
+        let scheduled = 0;
+        let ongoing = 0;
+        let completed = 0;
+
+        meetings.forEach(meeting => {
+            const meetingTime = new Date(meeting.meeting_time_ist);
+            const duration = meeting.duration || 60; // Default 60 minutes if not specified
+            const meetingEndTime = new Date(meetingTime.getTime() + duration * 60000);
+
+            if (now < meetingTime) {
+                // Meeting hasn't started yet
+                scheduled++;
+            } else if (now >= meetingTime && now <= meetingEndTime) {
+                // Meeting is currently happening
+                ongoing++;
+            } else {
+                // Meeting has ended
+                completed++;
+            }
+        });
+
+        const total = meetings.length;
+
+        response.status(200).json({
+            stats: {
+                scheduled,
+                ongoing,
+                completed,
+                total
+            }
+        });
+
+    }catch(error){
+        response.status(500).json({message: error.message});
+    };
+};
+
+
+
+export {ListMeetings, DeleteMeeting, GetMeetingStats};
