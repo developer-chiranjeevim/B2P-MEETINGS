@@ -149,7 +149,7 @@ const GetMeetingStats = async(request, response) => {
 };
 
 const FetchTeachersMeetings = async(request, response) => {
-    const owner = request.token.id.user_id
+    const owner = request.token.id.user_id;
     try{
         const params = {
             TableName: process.env.DYNAMO_DB_MEETINGS_TABLE_NAME,
@@ -244,4 +244,36 @@ const FetchAggregates = async(request, response) => {
 };
 
 
-export {ListMeetings, DeleteMeeting, GetMeetingStats, FetchTeachersMeetings, FetchAggregates};
+const FetchHistoricalMeetings = async (request, response) => {
+    const owner = request.token.id.user_id;
+
+    try {
+        const params = {
+        TableName: process.env.DYNAMO_DB_MEETINGS_TABLE_NAME,
+
+        // Since "owner" is NOT a partition key, use FilterExpression
+        FilterExpression: "#owner = :ownerValue",
+        ExpressionAttributeNames: {
+            "#owner": "owner",
+        },
+        ExpressionAttributeValues: {
+            ":ownerValue": owner,
+        },
+        };
+
+        const DBResponse = await client.send(new ScanCommand(params));
+
+        return response.status(200).json({
+        meetings: DBResponse.Items || [],
+        });
+
+    } catch (error) {
+        console.error("Error fetching historic meetings:", error);
+        return response
+        .status(500)
+        .json({ message: "Unable to fetch historical meetings" });
+    }
+};
+
+
+export {ListMeetings, DeleteMeeting, GetMeetingStats, FetchTeachersMeetings, FetchAggregates, FetchHistoricalMeetings};
