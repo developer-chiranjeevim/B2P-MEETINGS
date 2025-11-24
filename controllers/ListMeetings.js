@@ -148,6 +148,35 @@ const GetMeetingStats = async(request, response) => {
     };
 };
 
+const FetchTeachersMeetings = async(request, response) => {
+    const owner = request.token.id.user_id
+    try{
+        const params = {
+            TableName: process.env.DYNAMO_DB_MEETINGS_TABLE_NAME,
+            FilterExpression: '#owner = :ownerValue',
+            ExpressionAttributeNames: {
+                '#owner': 'owner'
+            },
+            ExpressionAttributeValues: {
+                ':ownerValue': owner
+            }
+        };
 
 
-export {ListMeetings, DeleteMeeting, GetMeetingStats};
+        const result = await client.send(new ScanCommand(params));
+        
+        response.status(200).json({
+            message: "Meetings fetched successfully",
+            data: result.Items,
+            count: result.Count
+        });
+
+    }catch(error){
+        console.error('Error fetching meetings:', error);
+        response.status(500).json({message: "Unable to fetch meetings"});
+    };
+};
+
+
+
+export {ListMeetings, DeleteMeeting, GetMeetingStats, FetchTeachersMeetings};
