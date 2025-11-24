@@ -315,4 +315,68 @@ const FetchHistoricalMeetings = async (request, response) => {
 };
 
 
-export {ListMeetings, DeleteMeeting, GetMeetingStats, FetchTeachersMeetings, FetchAggregates, FetchHistoricalMeetings};
+const FetchStudentsHistoricMeetings = async(request, response) => {
+
+    const studentId = request.token.id.student_id;
+
+    const params = {
+        TableName: process.env.DYNAMO_DB_MEETINGS_TABLE_NAME,
+        // FilterExpression checks if the 'participants' list contains the studentId
+        FilterExpression: "contains(participants, :studentId)",
+        ExpressionAttributeValues: {
+            ":studentId": studentId
+        }
+    };
+
+    try{
+
+        const DBResponse = await client.send(new ScanCommand(params));
+        const now = new Date();
+        
+        // Transform meetings to match frontend interface
+        const meetingsWithStatus = DBResponse.Items.map(meeting => {
+            const meetingDateTime = new Date(meeting.meeting_time_ist);
+            const duration = meeting.duration || 60;
+            const meetingEndTime = new Date(meetingDateTime.getTime() + duration * 60000);
+
+            let status;
+            if (now < meetingDateTime) {
+                status = 'scheduled';
+            } else if (now >= meetingDateTime && now <= meetingEndTime) {
+                status = 'ongoing';
+            } else {
+                status = 'completed';
+            }
+
+            // Extract date and time from meeting_time_ist
+            const dateObj = new Date(meeting.meeting_time_ist);
+            const date = dateObj.toISOString().split('T')[0]; // YYYY-MM-DD
+            const time = dateObj.toTimeString().slice(0, 5); // HH:MM
+
+            // Get participant details (student IDs and names)
+            const studentIds = meeting.participants || [];
+
+            return {
+                id: meeting.MEETING_ID,
+                title: meeting.title || `Meeting ${meeting.MEETING_ID}`, // Generate title if not present
+                description: meeting.description || '',
+                date: date,
+                time: time,
+                duration: duration,
+                teacherId: meeting.owner || '',
+                teacherName: meeting.owner_name || meeting.owner || '', // Use owner_name if available
+                studentIds: studentIds,
+                meetingLink: meeting.url || '',
+                status: status
+            };
+        });
+        
+        response.status(200).json({meetings: meetingsWithStatus});
+
+    }catch(error){
+        response.status(500).json({message: error.message});
+    };
+};
+
+
+export {ListMeetings, DeleteMeeting, GetMeetingStats, FetchTeachersMeetings, FetchAggregates, FetchHistoricalMeetings, FetchStudentsHistoricMeetings};
