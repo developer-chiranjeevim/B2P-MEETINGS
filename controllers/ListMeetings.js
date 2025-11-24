@@ -177,6 +177,71 @@ const FetchTeachersMeetings = async(request, response) => {
     };
 };
 
+const FetchAggregates = async(request, response) => {
+    const owner = request.token.id.user_id;
+    
+    try{
+        
+       const now = new Date();
+        const dayOfWeek = now.getDay(); 
+        const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek; 
+        
+        const startOfWeek = new Date(now);
+        startOfWeek.setDate(now.getDate() + mondayOffset);
+        startOfWeek.setHours(0, 0, 0, 0);
+        
+        const endOfWeek = new Date(startOfWeek);
+        endOfWeek.setDate(startOfWeek.getDate() + 6);
+        endOfWeek.setHours(23, 59, 59, 999);
+        
+        const formatTimestamp = (date) => {
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            const hours = String(date.getHours()).padStart(2, '0');
+            const minutes = String(date.getMinutes()).padStart(2, '0');
+            return `${year}-${month}-${day} ${hours}:${minutes}`;
+        };
+        
+        const startTimestamp = formatTimestamp(startOfWeek);
+        const endTimestamp = formatTimestamp(endOfWeek);
+
+        const params = {
+            TableName: process.env.DYNAMO_DB_MEETINGS_TABLE_NAME,
+            FilterExpression: '#owner = :ownerValue AND #meeting_time_ist BETWEEN :startDate AND :endDate',
+            ExpressionAttributeNames: {
+                '#owner': 'owner',
+                '#meeting_time_ist': 'meeting_time_ist'
+            },
+            ExpressionAttributeValues: {
+                ':ownerValue': owner,
+                ':startDate': startTimestamp,
+                ':endDate': endTimestamp
+            },
+            Select: 'COUNT'
+        };
+
+        const meetingsParams = {
+            TableName: process.env.DYNAMO_DB_STUDENT_USERS_TABLE_NAME
+        };
 
 
-export {ListMeetings, DeleteMeeting, GetMeetingStats, FetchTeachersMeetings};
+
+        const result = await client.send(new ScanCommand(params));
+        const student_results = await client.send(new ScanCommand(meetingsParams))
+       
+
+        response.status(200).json({
+           
+            meetings_count: result.Count,
+            student_count: student_results.Items.length
+        });
+
+    }catch(error){
+        console.error('Error fetching weekly meetings count:', error);
+        response.status(500).json({message: "Unable to fetch weekly meetings count"});
+    };
+};
+
+
+export {ListMeetings, DeleteMeeting, GetMeetingStats, FetchTeachersMeetings, FetchAggregates};
