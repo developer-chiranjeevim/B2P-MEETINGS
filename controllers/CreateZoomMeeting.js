@@ -1,6 +1,8 @@
 import axios from "axios";
 import GetZoomAccessToken from "../utilities/GetZoomAccessToken.js";
 import { CreateMeetingRecord } from "../utilities/CreateMeetingRecord.js";
+import { UpdateStudentStats } from "../utilities/UpdateStudentStatus.js";
+
 
 const CreateZoomMeeting = async (request, response) => {
   try {
@@ -54,6 +56,8 @@ const CreateZoomMeeting = async (request, response) => {
     };
 
     await CreateMeetingRecord(datas);
+    await UpdateStudentStats(datas.participants, false);
+
 
     response.status(200).json(datas);
 
