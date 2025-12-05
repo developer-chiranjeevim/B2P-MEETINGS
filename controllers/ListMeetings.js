@@ -151,24 +151,74 @@ const GetMeetingStats = async(request, response) => {
 const FetchTeachersMeetings = async(request, response) => {
     const owner = request.token.id.user_id;
     try{
+        // Calculate this week's date range (Sunday to Saturday)
+        const now = new Date();
+        const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
+        
+        // Start of this week (Sunday at 00:00:00 UTC)
+        const startOfWeek = new Date(now);
+        startOfWeek.setDate(now.getDate() - currentDay);
+        startOfWeek.setHours(0, 0, 0, 0);
+        
+        // End of this week (Saturday at 23:59:59 UTC)
+        const endOfWeek = new Date(startOfWeek);
+        endOfWeek.setDate(startOfWeek.getDate() + 6);
+        endOfWeek.setHours(23, 59, 59, 999);
+        
         const params = {
             TableName: process.env.DYNAMO_DB_MEETINGS_TABLE_NAME,
-            FilterExpression: '#owner = :ownerValue',
+            FilterExpression: '#owner = :ownerValue AND meeting_time_ist BETWEEN :startDate AND :endDate',
             ExpressionAttributeNames: {
                 '#owner': 'owner'
             },
             ExpressionAttributeValues: {
-                ':ownerValue': owner
+                ':ownerValue': owner,
+                ':startDate': startOfWeek.toISOString(),
+                ':endDate': endOfWeek.toISOString()
             }
         };
 
-
         const result = await client.send(new ScanCommand(params));
+        
+        // Add status to each meeting
+        const nowTimestamp = now.getTime();
+        
+        const meetingsWithStatus = result.Items.map(meeting => {
+            const meetingDateTime = new Date(meeting.meeting_time_ist);
+            const duration = meeting.duration || 60;
+            const meetingEndTime = new Date(meetingDateTime.getTime() + duration * 60000);
+            
+            const meetingStartTimestamp = meetingDateTime.getTime();
+            const meetingEndTimestamp = meetingEndTime.getTime();
+            
+            let status;
+            if (nowTimestamp < meetingStartTimestamp) {
+                status = 'scheduled';
+            } else if (nowTimestamp >= meetingStartTimestamp && nowTimestamp <= meetingEndTimestamp) {
+                status = 'ongoing';
+            } else {
+                status = 'completed';
+            }
+            
+            return {
+                ...meeting,
+                status: status
+            };
+        });
+        
+        // Sort by meeting time (earliest first)
+        meetingsWithStatus.sort((a, b) => 
+            new Date(a.meeting_time_ist).getTime() - new Date(b.meeting_time_ist).getTime()
+        );
         
         response.status(200).json({
             message: "Meetings fetched successfully",
-            data: result.Items,
-            count: result.Count
+            data: meetingsWithStatus,
+            count: meetingsWithStatus.length,
+            weekRange: {
+                start: startOfWeek.toISOString(),
+                end: endOfWeek.toISOString()
+            }
         });
 
     }catch(error){
