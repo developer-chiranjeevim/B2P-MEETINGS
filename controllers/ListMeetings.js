@@ -327,39 +327,34 @@ const FetchStudentsHistoricMeetings = async(request, response) => {
 
   try {
     const DBResponse = await client.send(new ScanCommand(params));
-    const now = new Date();
+    
+    // Always use UTC for comparisons
+    const now = new Date(); // This is always in UTC internally
 
-    // Transform meetings to match frontend interface
     const meetingsWithStatus = DBResponse.Items.map(meeting => {
-      // Parse the meeting time - ensure it's a valid date
+      // Parse meeting time (stored as UTC)
       const meetingDateTime = new Date(meeting.meeting_time_ist);
-      
-      // Add debugging (remove after testing)
-      console.log('Meeting time string:', meeting.meeting_time_ist);
-      console.log('Parsed meeting time:', meetingDateTime);
-      console.log('Current time:', now);
-      console.log('Is valid date:', !isNaN(meetingDateTime.getTime()));
-      
       const duration = meeting.duration || 60;
       const meetingEndTime = new Date(meetingDateTime.getTime() + duration * 60000);
       
-      let status;
+      // Compare using UTC timestamps (milliseconds since epoch)
+      const nowTimestamp = now.getTime();
+      const meetingStartTimestamp = meetingDateTime.getTime();
+      const meetingEndTimestamp = meetingEndTime.getTime();
       
-      // Check if date is valid first
-      if (isNaN(meetingDateTime.getTime())) {
-        status = 'error'; // Invalid date
-      } else if (now < meetingDateTime) {
+      let status;
+      if (nowTimestamp < meetingStartTimestamp) {
         status = 'scheduled';
-      } else if (now >= meetingDateTime && now <= meetingEndTime) {
+      } else if (nowTimestamp >= meetingStartTimestamp && nowTimestamp <= meetingEndTimestamp) {
         status = 'ongoing';
       } else {
         status = 'completed';
       }
 
-      // Extract date and time from meeting_time_ist
-      const dateObj = new Date(meeting.meeting_time_ist);
-      const date = dateObj.toISOString().split('T')[0]; // YYYY-MM-DD
-      const time = dateObj.toTimeString().slice(0, 5); // HH:MM
+      // Convert to IST for display purposes only
+      const istDate = new Date(meetingDateTime.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+      const date = istDate.toISOString().split('T')[0];
+      const time = istDate.toTimeString().slice(0, 5);
 
       const studentIds = meeting.participants || [];
 
