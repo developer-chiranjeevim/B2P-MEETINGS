@@ -419,7 +419,8 @@ const FetchStudentsHistoricMeetings = async(request, response) => {
         teacherName: meeting.owner_name || meeting.owner || '',
         studentIds: studentIds,
         meetingLink: meeting.url || '',
-        status: status
+        status: status,
+        share_url: meeting.share_url? meeting.share_url:null,
       };
     });
 
