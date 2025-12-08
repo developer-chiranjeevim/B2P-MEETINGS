@@ -2,7 +2,8 @@ import Razorpay from 'razorpay';
 import dotenv from "dotenv";
 import crypto from "crypto";
 import { client } from "../db/dbConfig.js";
-import { PutCommand } from "@aws-sdk/lib-dynamodb";
+import { PutCommand, ScanCommand } from "@aws-sdk/lib-dynamodb";
+
 
 dotenv.config();
 
@@ -132,5 +133,39 @@ const AddTransaction = async(request, response) => {
     };
 };
 
+const FetchTransaction = async (request, response) => {
+    
+    const student_id = request.token.id.student_id;
 
-export {GetRazorPayKey, MakePayment, VerifyPayment, AddTransaction}
+    try {
+        
+        const params = {
+            TableName: process.env.DYNAMO_DB_TRANSACTIONS_TABLE,
+            FilterExpression: "student_id = :sid",
+            ExpressionAttributeValues: {
+                ":sid": student_id,
+            },
+        };
+
+        
+        const dbResponse = await client.send(new ScanCommand(params));
+
+        
+        return response.status(200).json({
+            count: dbResponse.Count, 
+            data: dbResponse.Items,
+        });
+
+    } catch (error) {
+        
+        console.error("DynamoDB Scan Error:", error);
+        response.status(500).json({ 
+            message: "Failed to fetch transactions.",
+            details: error.message 
+        });
+    };
+};
+
+
+
+export {GetRazorPayKey, MakePayment, VerifyPayment, AddTransaction, FetchTransaction}
