@@ -108,7 +108,7 @@ const VerifyPayment = async(request, response) => {
 
 const AddTransaction = async(request, response) => {
     const {transaction_id, amount} = request.body;
-    const student_id = request.token.id;
+    const student_id = request.token.id.student_id;
 
     const datas = {
         transaction_id,
