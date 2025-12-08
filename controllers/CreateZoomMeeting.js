@@ -31,7 +31,7 @@ const CreateZoomMeeting = async (request, response) => {
           host_video: true,
           participant_video: true,
           join_before_host: true,
-          
+          recording_authentication: false,
           waiting_room: false,
           auto_recording: "cloud",
         },
@@ -67,5 +67,61 @@ const CreateZoomMeeting = async (request, response) => {
   }
 };
 
+const GetRecordingUrl = async (request, response) => {
+  try {
+    const { meetingId } = request.query ;
 
-export default CreateZoomMeeting;
+    if (!meetingId) {
+      return response.status(400).json({
+        error: "meetingId is required"
+      });
+    }
+
+    const token = await GetZoomAccessToken();
+
+    const zoom_response = await axios.get(
+      `https://api.zoom.us/v2/meetings/${meetingId}/recordings`,
+      {
+        headers: { 
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    // Extract just the share URL (public viewing link)
+    const recordingUrl = zoom_response.data.share_url;
+
+    // Or if you want the download URLs for each file:
+    const downloadUrls = zoom_response.data.recording_files?.map(file => ({
+      type: file.recording_type,
+      file_type: file.file_type,
+      download_url: file.download_url,
+      play_url: file.play_url
+    })) || [];
+
+    response.status(200).json({
+      meeting_id: zoom_response.data.id,
+      topic: zoom_response.data.topic,
+      share_url: recordingUrl, // Main share URL
+      recording_files: downloadUrls
+    });
+
+  } catch (error) {
+    console.error('Error fetching recording URL:', error.response?.data || error.message);
+    
+    if (error.response?.status === 404) {
+      return response.status(404).json({ 
+        message: "Recording not found. The meeting may not have been recorded yet." 
+      });
+    }
+
+    response.status(500).json({ 
+      message: "Failed to retrieve recording URL",
+      error: error.message 
+    });
+  }
+};
+
+
+export {CreateZoomMeeting, GetRecordingUrl};
