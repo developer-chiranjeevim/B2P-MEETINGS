@@ -4,7 +4,7 @@ import cors from "cors";
 import HomeRouter from "./routes/HomeRoute.js";
 import MeetingRoutes from "./routes/MeetingRoutes.js";
 import AssingmentRoutes from "./routes/AssignmentRoutes.js";
-
+import PaymentsRouter from "./routes/PaymentsRoute.js";
 
 dotenv.config();
 
@@ -19,6 +19,7 @@ app.use(express.json());
 app.use("/apis", HomeRouter);
 app.use("/apis", MeetingRoutes);
 app.use("/apis", AssingmentRoutes);
+app.use("/apis", PaymentsRouter);
 
 
 
