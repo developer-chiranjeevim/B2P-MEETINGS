@@ -14,52 +14,70 @@ const CreateZoomMeeting = async (request, response) => {
       });
     }
 
-    // Create ISO string in IST without converting to UTC
-    const zoomStartTime = `${date}T${time}:00`;
-
     const token = await GetZoomAccessToken();
+    const createdMeetings = [];
 
-    const zoom_response = await axios.post(
-      "https://api.zoom.us/v2/users/me/meetings",
-      {
-        topic: meetingName,
-        type: 2,
-        start_time: zoomStartTime, // stay in IST format
-        duration: duration,
-        timezone: "Asia/Kolkata", // Zoom will treat above time as IST
-        settings: {
-          host_video: true,
-          participant_video: true,
-          join_before_host: true,
-          recording_authentication: false,
-          waiting_room: false,
-          auto_recording: "cloud",
+    // Create meetings for the next 48 days
+    for (let dayOffset = 0; dayOffset < 48; dayOffset++) {
+      // Calculate the date for this iteration
+      const meetingDate = new Date(date);
+      meetingDate.setDate(meetingDate.getDate() + dayOffset);
+      
+      const formattedDate = meetingDate.toISOString().split('T')[0]; // YYYY-MM-DD
+      const zoomStartTime = `${formattedDate}T${time}:00`;
+      
+      // Include date in the meeting title
+      const titleWithDate = `${meetingName} - ${formattedDate}`;
+
+      const zoom_response = await axios.post(
+        "https://api.zoom.us/v2/users/me/meetings",
+        {
+          topic: titleWithDate,
+          type: 2,
+          start_time: zoomStartTime,
+          duration: duration,
+          timezone: "Asia/Kolkata",
+          settings: {
+            host_video: true,
+            participant_video: true,
+            join_before_host: true,
+            recording_authentication: false,
+            waiting_room: false,
+            auto_recording: "cloud",
+          },
         },
+        {
+          headers: { Authorization: `Bearer ${token}` }
+        }
+      );
 
-      },
-      {
-        headers: { Authorization: `Bearer ${token}` }
-      }
-    );
+      const datas = {
+        MEETING_ID: String(zoom_response.data.id),
+        title: titleWithDate,
+        url: zoom_response.data.join_url,
+        password: zoom_response.data.password,
+        meeting_time_ist: `${formattedDate} ${time}`,
+        isActive: true,
+        owner: owner,
+        participants: participants,
+        description: description,
+        duration: duration
+      };
 
-    const datas = {
-      MEETING_ID: String(zoom_response.data.id),
-      title: meetingName,
-      url: zoom_response.data.join_url,
-      password: zoom_response.data.password,
-      meeting_time_ist: `${date} ${time}`,
-      isActive: true,
-      owner: owner,
-      participants: participants,
-      description: description,
-      duration: duration
-    };
+      await CreateMeetingRecord(datas);
+      createdMeetings.push(datas);
+      
+      
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
 
-    await CreateMeetingRecord(datas);
-    await UpdateStudentStats(datas.participants, false);
+    // Update student stats once for all meetings
+    await UpdateStudentStats(participants, false);
 
-
-    response.status(200).json(datas);
+    response.status(200).json({
+      message: `Successfully created ${createdMeetings.length} meetings`,
+      meetings: createdMeetings
+    });
 
   } catch (error) {
     console.error(error.response?.data || error.message);

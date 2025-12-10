@@ -6,7 +6,7 @@ import tokenMiddleware from "../middleware/TokenMiddleware.js";
 const router = express.Router();
 
 
-router.post("/meeting/create-meeting", CreateZoomMeeting);
+router.post("/meeting/create-meeting", tokenMiddleware, CreateZoomMeeting);
 router.get("/meeting/list-meetings", ListMeetings);
 router.get("/meeting/get-meeting-stats", GetMeetingStats);
 router.delete("/meeting/delete-meeting", DeleteMeeting);
