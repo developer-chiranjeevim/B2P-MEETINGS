@@ -16,6 +16,7 @@
     "@aws-sdk/lib-dynamodb": "^3.927.0",
     "axios": "^1.13.2",
     "cors": "^2.8.5",
+    "date-fns": "^4.1.0",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "googleapis": "^165.0.0",

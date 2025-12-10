@@ -2,7 +2,7 @@ import axios from "axios";
 import GetZoomAccessToken from "../utilities/GetZoomAccessToken.js";
 import { CreateMeetingRecord } from "../utilities/CreateMeetingRecord.js";
 import { UpdateStudentStats } from "../utilities/UpdateStudentStatus.js";
-
+import { addDays, format, parse } from "date-fns";
 
 const CreateZoomMeeting = async (request, response) => {
   try {
@@ -17,13 +17,16 @@ const CreateZoomMeeting = async (request, response) => {
     const token = await GetZoomAccessToken();
     const createdMeetings = [];
 
+    // Parse the base date
+    const baseDate = parse(date, 'yyyy-MM-dd', new Date());
+
     // Create meetings for the next 48 days
     for (let dayOffset = 0; dayOffset < 48; dayOffset++) {
-      // Calculate the date for this iteration
-      const meetingDate = new Date(date);
-      meetingDate.setDate(meetingDate.getDate() + dayOffset);
+      // Add days without timezone issues
+      const meetingDate = addDays(baseDate, dayOffset);
       
-      const formattedDate = meetingDate.toISOString().split('T')[0]; // YYYY-MM-DD
+      // Format the date
+      const formattedDate = format(meetingDate, 'yyyy-MM-dd');
       const zoomStartTime = `${formattedDate}T${time}:00`;
       
       // Include date in the meeting title
@@ -67,11 +70,9 @@ const CreateZoomMeeting = async (request, response) => {
       await CreateMeetingRecord(datas);
       createdMeetings.push(datas);
       
-      
       await new Promise(resolve => setTimeout(resolve, 100));
     }
 
-    // Update student stats once for all meetings
     await UpdateStudentStats(participants, false);
 
     response.status(200).json({
