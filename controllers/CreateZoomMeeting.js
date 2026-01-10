@@ -2,7 +2,12 @@ import axios from "axios";
 import GetZoomAccessToken from "../utilities/GetZoomAccessToken.js";
 import { CreateMeetingRecord } from "../utilities/CreateMeetingRecord.js";
 import { UpdateStudentStats } from "../utilities/UpdateStudentStatus.js";
+import { client } from "../db/dbConfig.js";
 import { addDays, format, parse } from "date-fns";
+import { ScanCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+
+
+
 
 const CreateZoomMeeting = async (request, response) => {
   try {
@@ -142,5 +147,160 @@ const GetRecordingUrl = async (request, response) => {
   }
 };
 
+const DeleteAllZoomMeetings = async (request, response) => {
+  try {
+    const token = await GetZoomAccessToken();
+    const deletedMeetings = [];
+    const failedMeetings = [];
 
-export {CreateZoomMeeting, GetRecordingUrl};
+    // Step 1: Get all scheduled meetings from Zoom
+    const listResponse = await axios.get(
+      "https://api.zoom.us/v2/users/me/meetings",
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        params: {
+          type: "scheduled", // Only get scheduled meetings
+          page_size: 300 // Maximum allowed by Zoom API
+        }
+      }
+    );
+
+    const meetings = listResponse.data.meetings || [];
+
+    if (meetings.length === 0) {
+      return response.status(200).json({
+        message: "No meetings found to delete",
+        deleted: 0,
+        failed: 0
+      });
+    }
+
+    // Step 2: Delete each meeting
+    for (const meeting of meetings) {
+      try {
+        await axios.delete(
+          `https://api.zoom.us/v2/meetings/${meeting.id}`,
+          {
+            headers: { Authorization: `Bearer ${token}` }
+          }
+        );
+
+
+        deletedMeetings.push({
+          id: meeting.id,
+          topic: meeting.topic,
+          start_time: meeting.start_time
+        });
+
+        // Add delay to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+      } catch (error) {
+        console.error(`Failed to delete meeting ${meeting.id}:`, error.message);
+        failedMeetings.push({
+          id: meeting.id,
+          topic: meeting.topic,
+          error: error.message
+        });
+      }
+    }
+
+    response.status(200).json({
+      message: `Deletion complete`,
+      deleted: deletedMeetings.length,
+      failed: failedMeetings.length,
+      deletedMeetings: deletedMeetings,
+      failedMeetings: failedMeetings.length > 0 ? failedMeetings : undefined
+    });
+
+  } catch (error) {
+    console.error("Error deleting meetings:", error.response?.data || error.message);
+    response.status(500).json({ 
+      message: "Failed to delete meetings",
+      error: error.message 
+    });
+  }
+};
+
+
+const UpdateMeetingOwnership = async(request, response) => {
+  const current_owner = request.body.current_owner;
+  const new_owner = request.body.new_owner;
+
+  try {
+    // Validate input
+    if (!current_owner || !new_owner) {
+      return response.status(400).json({
+        error: "current_owner and new_owner are required"
+      });
+    }
+
+    // You'll need to import DynamoDB at the top of your file:
+    // import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+    // import { DynamoDBDocumentClient, ScanCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+    
+    // const client = new DynamoDBClient({ region: process.env.AWS_REGION || "ap-south-1" });
+    // const docClient = DynamoDBDocumentClient.from(client);
+    const tableName = process.env.DYNAMO_DB_MEETINGS_TABLE_NAME || "Meetings";
+    
+    // Step 1: Scan finds ALL meetings with current owner (not just one)
+    const scanParams = {
+      TableName: tableName,
+      FilterExpression: "#owner = :currentOwner",
+      ExpressionAttributeNames: {
+        "#owner": "owner"
+      },
+      ExpressionAttributeValues: {
+        ":currentOwner": current_owner
+      }
+    };
+
+    const scanResult = await client.send(new ScanCommand(scanParams));
+    const meetings = scanResult.Items || []; // This array contains ALL meetings for the owner
+
+    if (meetings.length === 0) {
+      return response.status(200).json({
+        message: "No meetings found for the current owner",
+        current_owner: current_owner,
+        updated_count: 0
+      });
+    }
+
+    // Step 2: Loop through and update EACH meeting found
+    let updatedCount = 0;
+    
+    for (const meeting of meetings) {  // This loops through ALL meetings
+      const updateParams = {
+        TableName: tableName,
+        Key: {
+          MEETING_ID: meeting.MEETING_ID
+        },
+        UpdateExpression: "SET #owner = :newOwner",
+        ExpressionAttributeNames: {
+          "#owner": "owner"
+        },
+        ExpressionAttributeValues: {
+          ":newOwner": new_owner
+        }
+      };
+
+      await client.send(new UpdateCommand(updateParams));
+      updatedCount++;  // Counts each successful update
+      
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+
+    response.status(200).json({
+      message: "Meeting ownership updated successfully",
+      current_owner: current_owner,
+      new_owner: new_owner,
+      updated_count: updatedCount  // Returns total number of meetings updated
+    });
+
+  } catch (error) {
+    console.error("Error updating meeting ownership:", error.message);
+    response.status(500).json({ message: error.message });
+  }
+};
+
+export {CreateZoomMeeting, GetRecordingUrl, DeleteAllZoomMeetings, UpdateMeetingOwnership} ;
