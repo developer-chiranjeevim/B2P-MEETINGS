@@ -1,5 +1,5 @@
 import { client } from "../db/dbConfig.js";
-import { ScanCommand, DeleteCommand } from "@aws-sdk/lib-dynamodb";
+import { ScanCommand, DeleteCommand, BatchGetCommand } from "@aws-sdk/lib-dynamodb";
 import GetZoomAccessToken from "../utilities/GetZoomAccessToken.js";
 import axios from "axios";
 
@@ -11,10 +11,45 @@ const ListMeetings = async(request, response) => {
     };
 
     try{
-
         const dbResponse = await client.send(new ScanCommand(params));
         const now = new Date();
         
+        // Get all unique student IDs from all meetings
+        const allStudentIds = [...new Set(
+            dbResponse.Items.flatMap(meeting => meeting.participants || [])
+        )];
+
+        // Fetch all student details in batch
+        const studentDetailsMap = new Map();
+        
+        if (allStudentIds.length > 0) {
+            // Fetch students in batches (DynamoDB BatchGetCommand has a limit of 100 items)
+            const batchSize = 100;
+            for (let i = 0; i < allStudentIds.length; i += batchSize) {
+                const batchIds = allStudentIds.slice(i, i + batchSize);
+                
+                const batchParams = {
+                    RequestItems: {
+                        [process.env.DYNAMO_DB_STUDENT_USERS_TABLE_NAME]: {
+                            Keys: batchIds.map(id => ({ 
+                                student_id: id
+                            }))
+                        }
+                    }
+                };
+
+                const batchResponse = await client.send(new BatchGetCommand(batchParams));
+                const students = batchResponse.Responses[process.env.DYNAMO_DB_STUDENT_USERS_TABLE_NAME] || [];
+                
+                students.forEach(student => {
+                    studentDetailsMap.set(student.student_id, {
+                        id: student.student_id,
+                        name: student.firstName || 'Unknown Student'
+                    });
+                });
+            }
+        }
+
         // Transform meetings to match frontend interface
         const meetingsWithStatus = dbResponse.Items.map(meeting => {
             const meetingDateTime = new Date(meeting.meeting_time_ist);
@@ -35,19 +70,24 @@ const ListMeetings = async(request, response) => {
             const date = dateObj.toISOString().split('T')[0]; // YYYY-MM-DD
             const time = dateObj.toTimeString().slice(0, 5); // HH:MM
 
-            // Get participant details (student IDs and names)
+            // Get participant details with names
             const studentIds = meeting.participants || [];
+            const students = studentIds.map(studentId => {
+                const studentDetail = studentDetailsMap.get(studentId);
+                return studentDetail || { id: studentId, name: 'Unknown Student' };
+            });
 
             return {
                 id: meeting.MEETING_ID,
-                title: meeting.title || `Meeting ${meeting.MEETING_ID}`, // Generate title if not present
+                title: meeting.title || `Meeting ${meeting.MEETING_ID}`,
                 description: meeting.description || '',
                 date: date,
                 time: time,
                 duration: duration,
                 teacherId: meeting.owner || '',
-                teacherName: meeting.owner_name || meeting.owner || '', // Use owner_name if available
+                teacherName: meeting.owner_name || meeting.owner || '',
                 studentIds: studentIds,
+                students: students, // Array of {id, name} objects
                 meetingLink: meeting.url || '',
                 status: status
             };
@@ -58,10 +98,7 @@ const ListMeetings = async(request, response) => {
     }catch(error){
         response.status(500).json({message: error.message});
     };
-
 };
-
-
 
 const DeleteMeeting = async(request, response) => {
 
@@ -180,6 +217,42 @@ const FetchTeachersMeetings = async(request, response) => {
 
         const result = await client.send(new ScanCommand(params));
         
+        // Get all unique student IDs from all meetings
+        const allStudentIds = [...new Set(
+            result.Items.flatMap(meeting => meeting.participants || [])
+        )];
+
+        // Fetch all student details in batch
+        const studentDetailsMap = new Map();
+        
+        if (allStudentIds.length > 0) {
+            // Fetch students in batches (DynamoDB BatchGetCommand has a limit of 100 items)
+            const batchSize = 100;
+            for (let i = 0; i < allStudentIds.length; i += batchSize) {
+                const batchIds = allStudentIds.slice(i, i + batchSize);
+                
+                const batchParams = {
+                    RequestItems: {
+                        [process.env.DYNAMO_DB_STUDENT_USERS_TABLE_NAME]: {
+                            Keys: batchIds.map(id => ({ 
+                                student_id: id
+                            }))
+                        }
+                    }
+                };
+
+                const batchResponse = await client.send(new BatchGetCommand(batchParams));
+                const students = batchResponse.Responses[process.env.DYNAMO_DB_STUDENT_USERS_TABLE_NAME] || [];
+                
+                students.forEach(student => {
+                    studentDetailsMap.set(student.student_id, {
+                        id: student.student_id,
+                        name: student.firstName || 'Unknown Student'
+                    });
+                });
+            }
+        }
+        
         // Add status to each meeting
         const nowTimestamp = now.getTime();
         
@@ -200,9 +273,17 @@ const FetchTeachersMeetings = async(request, response) => {
                 status = 'completed';
             }
             
+            // Get participant details with names
+            const studentIds = meeting.participants || [];
+            const students = studentIds.map(studentId => {
+                const studentDetail = studentDetailsMap.get(studentId);
+                return studentDetail || { id: studentId, name: 'Unknown Student' };
+            });
+            
             return {
                 ...meeting,
-                status: status
+                status: status,
+                students: students // Array of {id, name} objects
             };
         });
         
