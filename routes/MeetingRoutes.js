@@ -1,6 +1,6 @@
 import express from "express";
 import {CreateZoomMeeting, GetRecordingUrl} from "../controllers/CreateZoomMeeting.js";
-import { ListMeetings, DeleteMeeting, GetMeetingStats, FetchTeachersMeetings, FetchAggregates, FetchHistoricalMeetings, FetchStudentsHistoricMeetings } from "../controllers/ListMeetings.js";
+import { ListMeetings, DeleteMeeting, GetMeetingStats, FetchTeachersMeetings, FetchAggregates, FetchHistoricalMeetings, FetchStudentsHistoricMeetings, FetchTeachersMeetingAdmin } from "../controllers/ListMeetings.js";
 import tokenMiddleware from "../middleware/TokenMiddleware.js";
 import { DeleteAllZoomMeetings, UpdateMeetingOwnership} from "../controllers/CreateZoomMeeting.js";
 
@@ -11,6 +11,7 @@ const router = express.Router();
 router.post("/meeting/create-meeting", tokenMiddleware, CreateZoomMeeting);
 router.get("/meeting/list-meetings", ListMeetings);
 router.get("/meeting/get-meeting-stats", GetMeetingStats);
+router.get("/meeting/fetch-teachers-meeting-admin", tokenMiddleware, FetchTeachersMeetingAdmin)
 router.delete("/meeting/delete-meeting", DeleteMeeting);
 router.get("/meetings/fetch-teachers-meetings", tokenMiddleware, FetchTeachersMeetings);
 router.get("/meetings/fetch-aggregates", tokenMiddleware, FetchAggregates);

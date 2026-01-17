@@ -512,4 +512,128 @@ const FetchStudentsHistoricMeetings = async(request, response) => {
 };
 
 
-export {ListMeetings, DeleteMeeting, GetMeetingStats, FetchTeachersMeetings, FetchAggregates, FetchHistoricalMeetings, FetchStudentsHistoricMeetings};
+const FetchTeachersMeetingAdmin = async(request, response) => {
+    // Check if user is admin
+    const isAdmin = request.token.id.role === "admin" ? true : false;
+
+    if (!isAdmin) {
+        return response.status(403).json({
+            message: "Access denied. Admin privileges required."
+        });
+    }
+
+    // Validate that user_id is provided
+    if (!request.body.user_id) {
+        return response.status(400).json({
+            message: "user_id is required in request body"
+        });
+    }
+
+    const owner = request.body.user_id;
+
+    try{
+        // Fetch all meetings for the specified user (no date filter)
+        const params = {
+            TableName: process.env.DYNAMO_DB_MEETINGS_TABLE_NAME,
+            FilterExpression: '#owner = :ownerValue',
+            ExpressionAttributeNames: {
+                '#owner': 'owner'
+            },
+            ExpressionAttributeValues: {
+                ':ownerValue': owner
+            }
+        };
+
+        const result = await client.send(new ScanCommand(params));
+        
+        // Get all unique student IDs from all meetings
+        const allStudentIds = [...new Set(
+            result.Items.flatMap(meeting => meeting.participants || [])
+        )];
+
+        // Fetch all student details in batch
+        const studentDetailsMap = new Map();
+        
+        if (allStudentIds.length > 0) {
+            // Fetch students in batches (DynamoDB BatchGetCommand has a limit of 100 items)
+            const batchSize = 100;
+            for (let i = 0; i < allStudentIds.length; i += batchSize) {
+                const batchIds = allStudentIds.slice(i, i + batchSize);
+                
+                const batchParams = {
+                    RequestItems: {
+                        [process.env.DYNAMO_DB_STUDENT_USERS_TABLE_NAME]: {
+                            Keys: batchIds.map(id => ({ 
+                                student_id: id
+                            }))
+                        }
+                    }
+                };
+
+                const batchResponse = await client.send(new BatchGetCommand(batchParams));
+                const students = batchResponse.Responses[process.env.DYNAMO_DB_STUDENT_USERS_TABLE_NAME] || [];
+                
+                students.forEach(student => {
+                    studentDetailsMap.set(student.student_id, {
+                        id: student.student_id,
+                        name: student.firstName || 'Unknown Student'
+                    });
+                });
+            }
+        }
+        
+        // Add status to each meeting
+        const now = new Date();
+        const nowTimestamp = now.getTime();
+        
+        const meetingsWithStatus = result.Items.map(meeting => {
+            const meetingDateTime = new Date(meeting.meeting_time_ist);
+            const duration = meeting.duration || 60;
+            const meetingEndTime = new Date(meetingDateTime.getTime() + duration * 60000);
+            
+            const meetingStartTimestamp = meetingDateTime.getTime();
+            const meetingEndTimestamp = meetingEndTime.getTime();
+            
+            let status;
+            if (nowTimestamp < meetingStartTimestamp) {
+                status = 'scheduled';
+            } else if (nowTimestamp >= meetingStartTimestamp && nowTimestamp <= meetingEndTimestamp) {
+                status = 'ongoing';
+            } else {
+                status = 'completed';
+            }
+            
+            // Get participant details with names
+            const studentIds = meeting.participants || [];
+            const students = studentIds.map(studentId => {
+                const studentDetail = studentDetailsMap.get(studentId);
+                return studentDetail || { id: studentId, name: 'Unknown Student' };
+            });
+            
+            return {
+                ...meeting,
+                status: status,
+                students: students
+            };
+        });
+        
+        // Sort by meeting time (earliest first)
+        meetingsWithStatus.sort((a, b) => 
+            new Date(a.meeting_time_ist).getTime() - new Date(b.meeting_time_ist).getTime()
+        );
+        
+        response.status(200).json({
+            message: "Meetings fetched successfully",
+            data: meetingsWithStatus,
+            count: meetingsWithStatus.length,
+            queriedUser: owner
+        });
+
+    }catch(error){
+        console.error('Error fetching meetings:', error);
+        response.status(500).json({message: error.message});
+    };
+};
+
+
+export {ListMeetings, DeleteMeeting, GetMeetingStats, FetchTeachersMeetings, FetchAggregates, FetchHistoricalMeetings, FetchStudentsHistoricMeetings, FetchTeachersMeetingAdmin};
