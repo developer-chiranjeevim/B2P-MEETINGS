@@ -11,7 +11,7 @@ const router = express.Router();
 router.post("/meeting/create-meeting", tokenMiddleware, CreateZoomMeeting);
 router.get("/meeting/list-meetings", ListMeetings);
 router.get("/meeting/get-meeting-stats", GetMeetingStats);
-router.get("/meeting/fetch-teachers-meeting-admin", tokenMiddleware, FetchTeachersMeetingAdmin)
+router.post("/meeting/fetch-teachers-meeting-admin", tokenMiddleware, FetchTeachersMeetingAdmin)
 router.delete("/meeting/delete-meeting", DeleteMeeting);
 router.get("/meetings/fetch-teachers-meetings", tokenMiddleware, FetchTeachersMeetings);
 router.get("/meetings/fetch-aggregates", tokenMiddleware, FetchAggregates);
