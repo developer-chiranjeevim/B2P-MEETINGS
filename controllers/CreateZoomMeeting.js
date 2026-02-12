@@ -1,15 +1,13 @@
 import axios from "axios";
-import GetZoomAccessToken from "../utilities/GetZoomAccessToken.js";
 import { CreateMeetingRecord } from "../utilities/CreateMeetingRecord.js";
 import { UpdateStudentStats } from "../utilities/UpdateStudentStatus.js";
 import { client } from "../db/dbConfig.js";
 import { addDays, format, parse } from "date-fns";
 import { ScanCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 
+const DAILY_API_BASE_URL = "https://api.daily.co/v1";
 
-
-
-const CreateZoomMeeting = async (request, response) => {
+const CreateDailyMeeting = async (request, response) => {
   try {
     const { meetingName, date, time, owner, participants, description, duration } = request.body;
 
@@ -19,7 +17,6 @@ const CreateZoomMeeting = async (request, response) => {
       });
     }
 
-    const token = await GetZoomAccessToken();
     const createdMeetings = [];
 
     // Parse the base date
@@ -32,44 +29,59 @@ const CreateZoomMeeting = async (request, response) => {
       
       // Format the date
       const formattedDate = format(meetingDate, 'yyyy-MM-dd');
-      const zoomStartTime = `${formattedDate}T${time}:00`;
+      const meetingStartTime = `${formattedDate}T${time}:00`;
       
       // Include date in the meeting title
       const titleWithDate = `${meetingName} - ${formattedDate}`;
+      
+      // Create a unique room name (Daily requires URL-safe names)
+      const roomName = `${meetingName.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${formattedDate}-${time.replace(':', '')}`;
 
-      const zoom_response = await axios.post(
-        "https://api.zoom.us/v2/users/me/meetings",
+      // Calculate start time in Unix timestamp (seconds)
+      const startTimeDate = new Date(`${formattedDate}T${time}:00+05:30`); // IST timezone
+      const startTimeUnix = Math.floor(startTimeDate.getTime() / 1000);
+      
+      // Calculate expiry time (start time + duration in minutes)
+      const expiryTimeUnix = startTimeUnix + (duration * 60);
+
+      const daily_response = await axios.post(
+        `${DAILY_API_BASE_URL}/rooms`,
         {
-          topic: titleWithDate,
-          type: 2,
-          start_time: zoomStartTime,
-          duration: duration,
-          timezone: "Asia/Kolkata",
-          settings: {
-            host_video: true,
-            participant_video: true,
-            join_before_host: true,
-            recording_authentication: false,
-            waiting_room: false,
-            auto_recording: "cloud",
-          },
+          name: roomName,
+          properties: {
+            start_audio_off: false,
+            start_video_off: false,
+            enable_screenshare: true,
+            enable_chat: true,
+            enable_knocking: false, // equivalent to join_before_host
+            enable_prejoin_ui: true,
+            enable_recording: "cloud", // auto cloud recording
+            nbf: startTimeUnix, // not before - meeting start time
+            exp: expiryTimeUnix, // expiry time
+            max_participants: 50, // adjust as needed
+          }
         },
         {
-          headers: { Authorization: `Bearer ${token}` }
+          headers: { 
+            Authorization: `Bearer ${process.env.DAILY_CO_API_KEY}`,
+            'Content-Type': 'application/json'
+          }
         }
       );
 
       const datas = {
-        MEETING_ID: String(zoom_response.data.id),
+        MEETING_ID: daily_response.data.name, // Daily uses room name as ID
         title: titleWithDate,
-        url: zoom_response.data.join_url,
-        password: zoom_response.data.password,
+        url: daily_response.data.url,
+        password: "", // Daily uses meeting tokens for security instead of passwords
         meeting_time_ist: `${formattedDate} ${time}`,
         isActive: true,
         owner: owner,
         participants: participants,
         description: description,
-        duration: duration
+        duration: duration,
+        room_name: daily_response.data.name,
+        api_created: daily_response.data.api_created
       };
 
       await CreateMeetingRecord(datas);
@@ -93,42 +105,73 @@ const CreateZoomMeeting = async (request, response) => {
 
 const GetRecordingUrl = async (request, response) => {
   try {
-    const { meetingId } = request.query ;
+    const { meetingId } = request.query;
 
     if (!meetingId) {
       return response.status(400).json({
-        error: "meetingId is required"
+        error: "meetingId (room name) is required"
       });
     }
 
-    const token = await GetZoomAccessToken();
-
-    const zoom_response = await axios.get(
-      `https://api.zoom.us/v2/meetings/${meetingId}/recordings`,
+    // Get recordings for the room
+    const daily_response = await axios.get(
+      `${DAILY_API_BASE_URL}/recordings`,
       {
         headers: { 
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${process.env.DAILY_CO_API_KEY}`,
           'Content-Type': 'application/json'
+        },
+        params: {
+          room_name: meetingId,
+          limit: 100
         }
       }
     );
 
-    // Extract just the share URL (public viewing link)
-    const recordingUrl = zoom_response.data.share_url;
+    const recordings = daily_response.data.data || [];
 
-    // Or if you want the download URLs for each file:
-    const downloadUrls = zoom_response.data.recording_files?.map(file => ({
-      type: file.recording_type,
-      file_type: file.file_type,
-      download_url: file.download_url,
-      play_url: file.play_url
-    })) || [];
+    if (recordings.length === 0) {
+      return response.status(404).json({ 
+        message: "Recording not found. The meeting may not have been recorded yet." 
+      });
+    }
+
+    // Get the most recent recording
+    const latestRecording = recordings[0];
+
+    // Extract recording URLs
+    const recordingUrls = [];
+    
+    if (latestRecording.share_url) {
+      recordingUrls.push({
+        type: "share",
+        url: latestRecording.share_url
+      });
+    }
+
+    if (latestRecording.download_url) {
+      recordingUrls.push({
+        type: "download",
+        url: latestRecording.download_url
+      });
+    }
 
     response.status(200).json({
-      meeting_id: zoom_response.data.id,
-      topic: zoom_response.data.topic,
-      share_url: recordingUrl, // Main share URL
-      recording_files: downloadUrls
+      meeting_id: meetingId,
+      room_name: latestRecording.room_name,
+      share_url: latestRecording.share_url,
+      download_url: latestRecording.download_url,
+      duration: latestRecording.duration,
+      start_ts: latestRecording.start_ts,
+      status: latestRecording.status,
+      recording_files: recordingUrls,
+      all_recordings: recordings.map(rec => ({
+        id: rec.id,
+        share_url: rec.share_url,
+        download_url: rec.download_url,
+        duration: rec.duration,
+        start_ts: rec.start_ts
+      }))
     });
 
   } catch (error) {
@@ -147,27 +190,28 @@ const GetRecordingUrl = async (request, response) => {
   }
 };
 
-const DeleteAllZoomMeetings = async (request, response) => {
+const DeleteAllDailyMeetings = async (request, response) => {
   try {
-    const token = await GetZoomAccessToken();
     const deletedMeetings = [];
     const failedMeetings = [];
 
-    // Step 1: Get all scheduled meetings from Zoom
+    // Step 1: Get all rooms from Daily.co
     const listResponse = await axios.get(
-      "https://api.zoom.us/v2/users/me/meetings",
+      `${DAILY_API_BASE_URL}/rooms`,
       {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { 
+          Authorization: `Bearer ${process.env.DAILY_CO_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
         params: {
-          type: "scheduled", // Only get scheduled meetings
-          page_size: 300 // Maximum allowed by Zoom API
+          limit: 100 // Adjust if you have more rooms
         }
       }
     );
 
-    const meetings = listResponse.data.meetings || [];
+    const rooms = listResponse.data.data || [];
 
-    if (meetings.length === 0) {
+    if (rooms.length === 0) {
       return response.status(200).json({
         message: "No meetings found to delete",
         deleted: 0,
@@ -175,31 +219,34 @@ const DeleteAllZoomMeetings = async (request, response) => {
       });
     }
 
-    // Step 2: Delete each meeting
-    for (const meeting of meetings) {
+    // Step 2: Delete each room
+    for (const room of rooms) {
       try {
         await axios.delete(
-          `https://api.zoom.us/v2/meetings/${meeting.id}`,
+          `${DAILY_API_BASE_URL}/rooms/${room.name}`,
           {
-            headers: { Authorization: `Bearer ${token}` }
+            headers: { 
+              Authorization: `Bearer ${process.env.DAILY_CO_API_KEY}`,
+              'Content-Type': 'application/json'
+            }
           }
         );
 
-
         deletedMeetings.push({
-          id: meeting.id,
-          topic: meeting.topic,
-          start_time: meeting.start_time
+          id: room.id,
+          name: room.name,
+          url: room.url,
+          created_at: room.created_at
         });
 
         // Add delay to avoid rate limiting
         await new Promise(resolve => setTimeout(resolve, 100));
 
       } catch (error) {
-        console.error(`Failed to delete meeting ${meeting.id}:`, error.message);
+        console.error(`Failed to delete room ${room.name}:`, error.message);
         failedMeetings.push({
-          id: meeting.id,
-          topic: meeting.topic,
+          id: room.id,
+          name: room.name,
           error: error.message
         });
       }
@@ -222,7 +269,6 @@ const DeleteAllZoomMeetings = async (request, response) => {
   }
 };
 
-
 const UpdateMeetingOwnership = async(request, response) => {
   const current_owner = request.body.current_owner;
   const new_owner = request.body.new_owner;
@@ -235,12 +281,6 @@ const UpdateMeetingOwnership = async(request, response) => {
       });
     }
 
-    // You'll need to import DynamoDB at the top of your file:
-    // import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-    // import { DynamoDBDocumentClient, ScanCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
-    
-    // const client = new DynamoDBClient({ region: process.env.AWS_REGION || "ap-south-1" });
-    // const docClient = DynamoDBDocumentClient.from(client);
     const tableName = process.env.DYNAMO_DB_MEETINGS_TABLE_NAME || "Meetings";
     
     // Step 1: Scan finds ALL meetings with current owner (not just one)
@@ -303,4 +343,4 @@ const UpdateMeetingOwnership = async(request, response) => {
   }
 };
 
-export {CreateZoomMeeting, GetRecordingUrl, DeleteAllZoomMeetings, UpdateMeetingOwnership} ;
+export { CreateDailyMeeting, GetRecordingUrl, DeleteAllDailyMeetings, UpdateMeetingOwnership };
